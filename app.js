@@ -12,7 +12,10 @@
   const imgSeconds = Math.max(5, Number(params.get('seconds')) || 15);
   const maxClip = Math.max(10, Number(params.get('maxclip')) || 120); // safety cap per clip
   let i = 0, timer = null, paused = false, failures = 0, raf = null, imgStart = 0, imgElapsed = 0;
-  vid.muted = params.get('sound') !== '1';
+  // Sound is ON by default (add ?mute=1 to start muted). If the TV browser blocks
+  // autoplay with sound, it starts muted and the first click/key/tap turns sound on.
+  vid.muted = params.get('mute') === '1';
+  let wantSound = !vid.muted;
   soundBtn.textContent = vid.muted ? '🔇' : '🔊';
   const isVideo = s => /\.(mp4|webm|mov|m4v)(\?|$)/i.test(s);
 
@@ -66,7 +69,9 @@
   document.getElementById('next').onclick = next;
   document.getElementById('prev').onclick = () => show(i - 1);
   pauseBtn.onclick = togglePause;
-  soundBtn.onclick = () => { vid.muted = !vid.muted; soundBtn.textContent = vid.muted ? '🔇' : '🔊'; };
+  soundBtn.onclick = (e) => { e.stopPropagation(); vid.muted = !vid.muted; wantSound = !vid.muted; soundBtn.textContent = vid.muted ? '🔇' : '🔊'; };
+  const unlock = () => { if (wantSound && vid.muted) { vid.muted = false; soundBtn.textContent = '🔊'; } };
+  addEventListener('pointerdown', unlock); addEventListener('keydown', unlock);
   document.getElementById('full').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
   addEventListener('keydown', e => {
     if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); next(); }
