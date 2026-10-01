@@ -29,7 +29,15 @@
     }
     raf = requestAnimationFrame(tick);
   }
-  function next(){ show(i + 1); }
+  // TV browsers leak memory when they play video after video, and eventually the page dies
+  // (the image boards don't have this problem because pictures are light).
+  // Fix: after every full loop, reload the page cleanly at the clip boundary to clear memory.
+  const loopsBeforeReload = Math.max(1, Number(params.get('loops')) || 10);
+  let loopsDone = 0;
+  function next(){
+    if (slides.length > 1 && i === slides.length - 1 && ++loopsDone >= loopsBeforeReload) { location.reload(); return; }
+    show(i + 1);
+  }
   function fail(){
     failures++;
     if (failures < slides.length) next();
@@ -46,6 +54,7 @@
       img.classList.remove('on');
       vid.onended = next;
       vid.onerror = fail;
+      vid.pause(); vid.removeAttribute('src'); vid.load();   // free the previous clip's memory
       vid.src = src;
       vid.play().then(() => { failures = 0; vid.classList.add('on'); })
         .catch(() => { vid.muted = true; soundBtn.textContent = '🔇'; vid.play().then(() => vid.classList.add('on')).catch(fail); });
