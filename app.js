@@ -10,7 +10,7 @@
   const pauseBtn = document.getElementById('pause'), soundBtn = document.getElementById('sound');
   const params = new URLSearchParams(location.search);
   const imgSeconds = Math.max(5, Number(params.get('seconds')) || 15);
-  const maxClip = Math.max(10, Number(params.get('maxclip')) || 120); // safety cap per clip
+  const maxClip = Math.max(10, Number(params.get('maxclip')) || 60); // safety cap per clip
   let i = 0, timer = null, paused = false, failures = 0, raf = null, imgStart = 0, imgElapsed = 0;
   // Sound is ON by default (add ?mute=1 to start muted). If the TV browser blocks
   // autoplay with sound, it starts muted and the first click/key/tap turns sound on.
@@ -98,5 +98,23 @@
     if (!slides.length) { counter.textContent = 'No clips yet'; counter.style.opacity = 1; return; }
     show(0);
   }
+  // ---- Keep-alive: make sure the loop never stops ----
+  // 1) If a clip freezes (no progress for 6s), skip to the next one.
+  // 2) If the whole board has made no progress for 90s, reload the page.
+  // 3) Reload when the TV's internet comes back. 4) Re-ask the TV to stay awake every minute.
+  let lastT = -1, stillSecs = 0, lastProgress = Date.now();
+  setInterval(() => {
+    if (paused || !slides.length) { lastProgress = Date.now(); return; }
+    if (isVideo(slides[i])) {
+      const t = vid.currentTime;
+      if (t !== lastT) { lastT = t; stillSecs = 0; lastProgress = Date.now(); }
+      else if (++stillSecs >= 6) { stillSecs = 0; lastT = -1; next(); }
+    } else lastProgress = Date.now();
+    if (Date.now() - lastProgress > 90000) location.reload();
+  }, 1000);
+  addEventListener('online', () => location.reload());
+  setInterval(wake, 60000);
+  window.onerror = () => setTimeout(() => location.reload(), 10000);
+
   tick(); discover();
 })();
