@@ -15,6 +15,8 @@
 
   let slides = (window.SLIDES || []).slice();
   let i = 0, cur = 0, paused = false, muted = params.get('sound') !== '1';
+  // single-player mode for TVs that can only decode one video at a time (?simple=1 forces it)
+  let single = params.get('simple') === '1';
   let switching = false, imgTimer = null, imgStart = 0, imgElapsed = 0, failures = 0, retryTimer = null;
 
   const active = () => players[cur], standby = () => players[1 - cur];
@@ -24,7 +26,7 @@
 
   // Load a clip into a player without playing it.
   function prep(p, src){ if (p.dataset.src !== src) { p.dataset.src = src; p.src = src; p.load(); } }
-  function preloadNext(){ const s = slides[idx(i + 1)]; if (isVideo(s)) prep(standby(), s); }
+  function preloadNext(){ if (single) return; const s = slides[idx(i + 1)]; if (isVideo(s)) prep(standby(), s); }
 
   function play(p){
     return p.play().catch(() => { setMuted(true); return p.play(); }); // browsers block autoplay with sound
@@ -36,7 +38,15 @@
     i = idx(n);
     const src = slides[i];
     counter.textContent = `${i + 1} / ${slides.length}`;
-    if (isVideo(src)) {
+    if (isVideo(src) && single) {
+      const p = active(); standby().pause(); standby().removeAttribute('src'); standby().classList.remove('on');
+      p.classList.remove('on');
+      setTimeout(() => {
+        prep(p, src); p.currentTime = 0;
+        play(p).then(() => { failures = 0; p.classList.add('on'); img.classList.remove('on'); switching = false; if (paused) p.pause(); })
+          .catch(() => { switching = false; fail(); });
+      }, 350);
+    } else if (isVideo(src)) {
       const old = active(), nxt = standby();
       prep(nxt, src);
       nxt.currentTime = 0;
@@ -47,7 +57,11 @@
         cur = 1 - cur;
         setTimeout(() => { old.pause(); switching = false; preloadNext(); }, FADE * 1000);
         if (paused) nxt.pause();
-      }).catch(() => { switching = false; fail(); });
+      }).catch(() => {
+        // Second player couldn't start: this TV likely supports one video at a time. Switch modes and retry this clip.
+        if (!single) { single = true; nxt.removeAttribute('src'); nxt.dataset.src = ''; nxt.load(); show(i); return; }
+        switching = false; fail();
+      });
     } else {
       const p = new Image();
       p.onload = () => {
@@ -74,6 +88,15 @@
     });
     p.addEventListener('ended', () => { if (p === active() && !switching) { switching = true; show(i + 1); } });
   });
+
+  // Watchdog: if the playing clip freezes for 8s (stalled download, decoder hiccup), move on.
+  let lastT = -1, stuck = 0;
+  setInterval(() => {
+    const s = slides[i]; if (!s || !isVideo(s) || paused || switching) { stuck = 0; return; }
+    const t = active().currentTime;
+    if (t === lastT) { if (++stuck >= 8) { stuck = 0; switching = true; show(i + 1); } } else stuck = 0;
+    lastT = t;
+  }, 1000);
 
   // Progress bar
   (function tick(){
