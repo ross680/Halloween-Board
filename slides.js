@@ -1,4 +1,11 @@
 window.SLIDES = [
-  // Add one line per clip or image, in play order. Example:
-  // "assets/clips/01-pumpkin.mp4",
+  "assets/clips/01-ghostface-answers-the-call.mp4",
+  "assets/clips/02-the-ring.mp4",
+  "assets/clips/03-leatherface.mp4",
+  "assets/clips/04-chucky.mp4",
+  "assets/clips/05-pennywise.mp4",
+  "assets/clips/06-ghostface-answers-the-leak.mp4",
+  "assets/clips/07-michael-myers-quiet-drip.mp4",
+  "assets/clips/08-freddy-krueger-after-midnight.mp4",
+  "assets/clips/09-jason-voorhees-drain-terror.mp4",
 ];
