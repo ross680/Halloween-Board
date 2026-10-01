@@ -27,7 +27,11 @@
     raf = requestAnimationFrame(tick);
   }
   function next(){ show(i + 1); }
-  function fail(){ failures++; if (failures < slides.length) next(); }
+  function fail(){
+    failures++;
+    if (failures < slides.length) next();
+    else { failures = 0; clearTimeout(timer); timer = setTimeout(() => show(0), 60000); } // nothing loaded (e.g. site still publishing): retry in a minute
+  }
   function show(n){
     if (!slides.length) return;
     clearTimeout(timer);
