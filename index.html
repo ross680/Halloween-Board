@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0604" />
+  <title>3R Halloween TV</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main id="stage" aria-label="3R Halloween slideshow">
+    <video id="vid" muted playsinline preload="auto"></video>
+    <img id="img" alt="3R Halloween slide" />
+    <div id="fade"></div>
+    <div id="progress"><span></span></div>
+    <div id="counter" aria-live="polite"></div>
+    <div id="controls">
+      <button id="prev" aria-label="Previous">◀</button>
+      <button id="pause" aria-label="Pause">Ⅱ</button>
+      <button id="next" aria-label="Next">▶</button>
+      <button id="sound" aria-label="Toggle sound">🔇</button>
+      <button id="full" aria-label="Fullscreen">⛶</button>
+    </div>
+  </main>
+  <script src="slides.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
