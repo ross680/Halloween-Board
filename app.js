@@ -32,9 +32,32 @@
   // TV browsers leak memory when they play video after video, and eventually the page dies
   // (the image boards don't have this problem because pictures are light).
   // Fix: after every full loop, reload the page cleanly at the clip boundary to clear memory.
+  // ---- "Fresh" mode (?fresh=1): load a brand-new page for EVERY clip, the way the
+  // picture boards behave, so the TV browser never builds up video memory.
+  // The next clip number is remembered across reloads so the order keeps going.
+  const fresh = params.get('fresh') === '1';
+  const store = { get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } },
+                  set(k,v){ try { localStorage.setItem(k, v); } catch(e){} } };
+  // Diagnostics (?debug=1): small on-screen box with uptime, reload count, errors.
+  const debug = params.get('debug') === '1';
+  if (!store.get('hb_since')) store.set('hb_since', Date.now());
+  store.set('hb_loads', (Number(store.get('hb_loads')) || 0) + 1);
+  let dbg = null;
+  if (debug) {
+    dbg = document.createElement('div');
+    dbg.style.cssText = 'position:fixed;left:10px;top:10px;z-index:9;background:rgba(0,0,0,.75);color:#ff7a1a;font:14px monospace;padding:8px 10px;border-radius:6px;white-space:pre';
+    document.body.appendChild(dbg);
+    setInterval(() => {
+      const up = Math.round((Date.now() - Number(store.get('hb_since'))) / 60000);
+      const mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) + ' MB' : 'n/a';
+      dbg.textContent = `mode: ${fresh ? 'fresh' : 'normal'}\nrunning: ${up} min\npage loads: ${store.get('hb_loads')}\nclip: ${i + 1}/${slides.length}\nmemory: ${mem}\nlast problem: ${store.get('hb_err') || 'none'}`;
+    }, 1000);
+  }
+  const note = msg => store.set('hb_err', new Date().toLocaleTimeString() + ' ' + msg);
   const loopsBeforeReload = Math.max(1, Number(params.get('loops')) || 10);
   let loopsDone = 0;
   function next(){
+    if (fresh && slides.length > 1) { store.set('hb_next', (i + 1) % slides.length); location.replace(location.href); return; }
     if (slides.length > 1 && i === slides.length - 1 && ++loopsDone >= loopsBeforeReload) { location.reload(); return; }
     show(i + 1);
   }
@@ -53,7 +76,7 @@
     if (isVideo(src)) {
       img.classList.remove('on');
       vid.onended = next;
-      vid.onerror = fail;
+      vid.onerror = () => { note('could not load ' + src); fail(); };
       vid.pause(); vid.removeAttribute('src'); vid.load();   // free the previous clip's memory
       vid.src = src;
       vid.play().then(() => { failures = 0; vid.classList.add('on'); })
@@ -105,7 +128,9 @@
     } catch (e) {}
     if (params.get('shuffle') === '1') slides.sort(() => Math.random() - 0.5);
     if (!slides.length) { counter.textContent = 'No clips yet'; counter.style.opacity = 1; return; }
-    show(0);
+    let start = 0;
+    if (fresh) { start = Number(store.get('hb_next')) || 0; if (start >= slides.length) start = 0; }
+    show(start);
   }
   // ---- Keep-alive: make sure the loop never stops ----
   // 1) If a clip freezes (no progress for 6s), skip to the next one.
@@ -117,13 +142,13 @@
     if (isVideo(slides[i])) {
       const t = vid.currentTime;
       if (t !== lastT) { lastT = t; stillSecs = 0; lastProgress = Date.now(); }
-      else if (++stillSecs >= 6) { stillSecs = 0; lastT = -1; next(); }
+      else if (++stillSecs >= 6) { stillSecs = 0; lastT = -1; note('clip froze: ' + slides[i]); next(); }
     } else lastProgress = Date.now();
-    if (Date.now() - lastProgress > 90000) location.reload();
+    if (Date.now() - lastProgress > 90000) { note('board stuck, reloaded'); location.reload(); }
   }, 1000);
   addEventListener('online', () => location.reload());
   setInterval(wake, 60000);
-  window.onerror = () => setTimeout(() => location.reload(), 10000);
+  window.onerror = (m) => { note('error: ' + m); setTimeout(() => location.reload(), 10000); };
 
   tick(); discover();
 })();
