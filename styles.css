@@ -2,9 +2,8 @@
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
 body{font-family:Arial,Helvetica,sans-serif;color:#fff}
 #stage{position:fixed;inset:0;background:var(--bg);cursor:none}
-#stage .vid,#img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;opacity:0;transition:opacity .8s ease}
-#stage .vid.on,#img.on{opacity:1}
-#stage .vid.on{z-index:1}
+#vid,#img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;opacity:0;transition:opacity .6s ease}
+#vid.on,#img.on{opacity:1}
 #fade{position:absolute;inset:0;pointer-events:none;background:linear-gradient(to bottom,rgba(0,0,0,.08),transparent 15%,transparent 84%,rgba(0,0,0,.2))}
 #progress{position:absolute;left:0;right:0;bottom:0;height:5px;background:rgba(255,255,255,.08)}
 #progress span{display:block;width:0;height:100%;background:var(--accent);box-shadow:0 0 10px var(--accent)}
