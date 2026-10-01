@@ -8,4 +8,5 @@ window.SLIDES = [
   "assets/clips/07-michael-myers-quiet-drip.mp4",
   "assets/clips/08-freddy-krueger-after-midnight.mp4",
   "assets/clips/09-jason-voorhees-drain-terror.mp4",
+  "assets/clips/10-frankenstein-old-boilers.mp4",
 ];
