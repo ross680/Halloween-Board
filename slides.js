@@ -9,4 +9,7 @@ window.SLIDES = [
   "assets/clips/08-freddy-krueger-after-midnight.mp4",
   "assets/clips/09-jason-voorhees-drain-terror.mp4",
   "assets/clips/10-frankenstein-old-boilers.mp4",
+  "assets/clips/11-swamp-witch-sump-pumps.mp4",
+  "assets/clips/12-scarecrow-furnaces.jpg",
+  "assets/clips/13-headless-horseman-boilers.jpg",
 ];
