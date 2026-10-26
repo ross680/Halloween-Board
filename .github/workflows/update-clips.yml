@@ -1,0 +1,59 @@
+name: Update clip playlist
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'assets/clips/**'
+      - 'scripts/update-manifest.mjs'
+      - '.github/workflows/update-clips.yml'
+  pull_request:
+    paths:
+      - 'assets/clips/**'
+      - 'scripts/update-manifest.mjs'
+      - 'clips.json'
+      - 'slides.js'
+      - 'index.html'
+      - '.github/workflows/update-clips.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: clip-playlist-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check clips.json and slides.js match assets/clips
+        run: node scripts/update-manifest.mjs --check
+
+  update:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Regenerate the playlist
+        run: node scripts/update-manifest.mjs
+      - name: Commit the playlist if it changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add clips.json slides.js index.html
+          if git diff --cached --quiet; then
+            echo "Playlist already matches assets/clips."
+          else
+            git commit -m "Update clip playlist from assets/clips"
+            git push
+          fi

@@ -1,2 +1,4 @@
 Drag Halloween clips (MP4/WebM/MOV) into this folder.
 They play in file-name order, so number them: 01-..., 02-...
+Commit the files. GitHub Actions rebuilds clips.json and slides.js.
+To rebuild them yourself: node scripts/update-manifest.mjs

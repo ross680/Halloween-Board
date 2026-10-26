@@ -1,47 +1,377 @@
 (() => {
-  // Plays a mix of video clips (mp4/webm/mov) and images.
-  // Videos play to the end, then advance. Images show for ?seconds= (default 15).
-  // Clips are discovered automatically from assets/clips in the GitHub repo
-  // (sorted by file name). slides.js is only a fallback if GitHub can't be reached.
-  const REPO = 'ross680/Halloween-Board', FOLDER = 'assets/clips';
-  let slides = (window.SLIDES || []).slice();
-  const vid = document.getElementById('vid'), img = document.getElementById('img');
-  const bar = document.querySelector('#progress span'), counter = document.getElementById('counter');
-  const pauseBtn = document.getElementById('pause'), soundBtn = document.getElementById('sound');
+  // Shop-TV playlist. One video element is reused for every clip. The playlist
+  // comes from clips.json (regenerated in CI from assets/clips). slides.js is
+  // the same list, used when that file can't be fetched. There is no GitHub API
+  // call: an unattended TV was burning the unauthenticated rate limit and then
+  // playing a stale fallback.
   const params = new URLSearchParams(location.search);
-  const imgSeconds = Math.max(5, Number(params.get('seconds')) || 15);
-  const maxClip = Math.max(10, Number(params.get('maxclip')) || 60); // safety cap per clip
-  let i = 0, timer = null, paused = false, failures = 0, raf = null, imgStart = 0, imgElapsed = 0;
-  // Sound is ON by default (add ?mute=1 to start muted). If the TV browser blocks
-  // autoplay with sound, it starts muted and the first click/key/tap turns sound on.
+  const num = (key, fallback, min, max) => {
+    if (!params.has(key)) return fallback;
+    const n = Number(params.get(key));
+    if (!isNaN(n) && isFinite(n)) {
+      if (n < min) return min;
+      if (max != null && n > max) return max;
+      return n;
+    }
+    return fallback;
+  };
+
+  const imgSeconds = num('seconds', 15, 5);
+  const maxClip = num('maxclip', 60, 10);
+  const stallSeconds = num('stall', 20, 5);
+  const watchdogSeconds = num('watchdog', 90, 20);
+  const loopsBeforeReload = num('loops', 0, 0);
+  const reloadHours = num('reload', 0, 0);
+  const nightlyOn = params.get('nightly') !== '0';
+  const nightlyHour = num('athour', 3, 0, 23);
+  const fresh = params.get('fresh') === '1';
+  const debug = params.get('debug') === '1';
+
+  const vid = document.getElementById('vid');
+  const img = document.getElementById('img');
+  const bar = document.querySelector('#progress span');
+  const counter = document.getElementById('counter');
+  const pauseBtn = document.getElementById('pause');
+  const soundBtn = document.getElementById('sound');
+
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  };
+  if (!store.get('hb_since')) store.set('hb_since', String(Date.now()));
+  store.set('hb_loads', String((Number(store.get('hb_loads')) || 0) + 1));
+
+  // Sound is on unless ?mute=1. If the TV blocks audible autoplay, playback
+  // continues muted and the first tap/key turns sound back on.
   vid.muted = params.get('mute') === '1';
   let wantSound = !vid.muted;
+  let triedMuted = false;
   soundBtn.textContent = vid.muted ? '🔇' : '🔊';
-  const isVideo = s => /\.(mp4|webm|mov|m4v)(\?|$)/i.test(s);
 
-  function tick(){
+  const isVideo = s => /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(s);
+  let slides = [];
+  let i = 0;
+  let generation = 0;
+  let expectedSrc = '';
+  let paused = false;
+  let failures = 0;
+  let loopsDone = 0;
+  let boundaryReload = '';
+  let reloading = false;
+  let failedGen = -1;
+  let timer = null;
+  let stallTimer = null;
+  let deadline = 0;
+  let lastGood = Date.now();
+  let lastMediaTime = -1;
+  let sawFrame = false;
+  let imgStart = 0;
+  let imgElapsed = 0;
+  const booted = Date.now();
+
+  const note = msg => store.set('hb_err', new Date().toLocaleTimeString() + ' ' + msg);
+
+  function releaseVideo() {
+    // Detach the decoder before the next clip. Handlers ignore this moment
+    // because expectedSrc is cleared first: an empty load must not count as a
+    // failed clip (some TV browsers fire error when src is removed).
+    expectedSrc = '';
+    vid.onended = null;
+    try { vid.pause(); } catch (e) {}
+    vid.removeAttribute('src');
+    try { vid.load(); } catch (e) {}
+    vid.classList.remove('on');
+  }
+
+  function releaseImage() {
+    img.onload = null;
+    img.onerror = null;
+    img.classList.remove('on');
+    img.removeAttribute('src');
+  }
+
+  function clearClipTimers() {
+    clearTimeout(timer);
+    clearTimeout(stallTimer);
+    timer = null;
+    stallTimer = null;
+  }
+
+  function armStall(gen) {
+    clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      if (gen !== generation || paused) return;
+      recover('stalled ' + (slides[i] || ''));
+    }, stallSeconds * 1000);
+  }
+
+  function armMax(gen, ms) {
+    clearTimeout(timer);
+    if (ms < 0) ms = 0;
+    deadline = Date.now() + ms;
+    timer = setTimeout(() => { if (gen === generation) advance(gen); }, ms);
+  }
+
+  function playClip(gen) {
+    let ret;
+    try { ret = vid.play(); } catch (e) { ret = Promise.reject(e); }
+    // Older TV browsers return undefined from play(). Calling .then on that
+    // threw, window.onerror reloaded the page, and the board crash-looped.
+    Promise.resolve(ret).then(() => {
+      if (gen !== generation) return;
+      vid.classList.add('on');
+      lastGood = Date.now();
+    }).catch(() => {
+      if (gen !== generation) return;
+      if (!vid.muted && !triedMuted) {
+        triedMuted = true;
+        vid.muted = true;
+        soundBtn.textContent = '🔇';
+        playClip(gen);
+        return;
+      }
+      recover('playback rejected ' + (slides[i] || ''));
+    });
+  }
+
+  function goTo(n) {
+    if (fresh && slides.length > 1) {
+      const next = ((n % slides.length) + slides.length) % slides.length;
+      store.set('hb_next', String(next));
+      location.replace(location.pathname + location.search);
+      return;
+    }
+    show(n);
+  }
+
+  function advance(gen) {
+    if (gen != null && gen !== generation) return;
+    if (!slides.length) return;
+    if (boundaryReload) { safeReload(boundaryReload, false); return; }
+    if (loopsBeforeReload > 0 && slides.length > 1 && i === slides.length - 1) {
+      loopsDone += 1;
+      if (loopsDone >= loopsBeforeReload) { safeReload('loop reset', false); return; }
+    }
+    goTo(i + 1);
+  }
+
+  function safeReload(reason, failure) {
+    if (reloading) return;
+    note(reason);
+    const last = Number(store.get('hb_reload_at')) || 0;
+    // A clip that kills the page must not reboot the TV every few seconds.
+    if (failure && Date.now() - last < 180000) {
+      clearClipTimers();
+      failures = 0;
+      timer = setTimeout(() => show(0), 60000);
+      return;
+    }
+    reloading = true;
+    store.set('hb_reload_at', String(Date.now()));
+    store.set('hb_reason', reason);
+    if (slides.length) store.set('hb_next', String((i + 1) % slides.length));
+    location.reload();
+  }
+
+  function recover(reason) {
+    // error and play() rejection can both fire for one bad file. Count that
+    // once, and skip on a later turn so we never re-enter show() mid-load.
+    const gen = generation;
+    if (failedGen === gen || reloading) return;
+    failedGen = gen;
+    note(reason);
+    setTimeout(() => {
+      if (generation !== gen || reloading) return;
+      if (boundaryReload) { safeReload(boundaryReload, false); return; }
+      failures += 1;
+      if (!slides.length) return;
+      if (failures >= slides.length) {
+        failures = 0;
+        safeReload('watchdog ' + reason, true);
+        return;
+      }
+      goTo(i + 1);
+    }, 0);
+  }
+
+  function show(n) {
+    if (!slides.length) return;
+    let gen;
+    try {
+      gen = ++generation;
+      clearClipTimers();
+      releaseImage();
+      releaseVideo();
+      i = ((n % slides.length) + slides.length) % slides.length;
+      const src = slides[i];
+      counter.textContent = (i + 1) + ' / ' + slides.length;
+      bar.style.width = '0%';
+      lastMediaTime = -1;
+      sawFrame = false;
+      if (isVideo(src)) {
+        expectedSrc = src;
+        vid.onended = () => {
+          if (generation !== gen) return;
+          if ((vid.getAttribute('src') || '') !== expectedSrc) return;
+          failures = 0;
+          lastGood = Date.now();
+          advance(gen);
+        };
+        vid.onerror = () => {
+          // Ignore the error some browsers emit while the previous clip is released.
+          const current = vid.getAttribute('src') || '';
+          if (!current || current !== expectedSrc || generation !== gen) return;
+          recover('could not load ' + current);
+        };
+        vid.ontimeupdate = () => {
+          if (paused || generation !== gen) return;
+          if (vid.currentTime > lastMediaTime + 0.2) {
+            lastMediaTime = vid.currentTime;
+            lastGood = Date.now();
+            failures = 0;
+            armStall(gen);
+            if (!sawFrame && vid.currentTime > 1) {
+              if (vid.videoWidth > 0) sawFrame = true;
+              else recover('no frames ' + src);
+            }
+          }
+        };
+        vid.src = src;
+        playClip(gen);
+        armMax(gen, maxClip * 1000);
+        armStall(gen);
+        if (paused) vid.pause();
+      } else {
+        img.onload = () => {
+          if (generation !== gen) return;
+          img.classList.add('on');
+          failures = 0;
+          lastGood = Date.now();
+          imgStart = performance.now();
+          imgElapsed = 0;
+          if (!paused) armMax(gen, imgSeconds * 1000);
+        };
+        img.onerror = () => { if (generation === gen) recover('could not load ' + src); };
+        img.src = src;
+      }
+    } catch (e) {
+      note('show failed ' + (e && e.message ? e.message : e));
+      recover('show failed');
+    }
+  }
+
+  function togglePause() {
+    paused = !paused;
+    pauseBtn.textContent = paused ? '▶' : 'Ⅱ';
+    const gen = generation;
+    if (paused) {
+      clearClipTimers();
+      if (isVideo(slides[i])) { try { vid.pause(); } catch (e) {} }
+      else imgElapsed += (performance.now() - imgStart) / 1000;
+      return;
+    }
+    if (isVideo(slides[i])) {
+      playClip(gen);
+      armMax(gen, Math.max(0, deadline - Date.now()));
+      armStall(gen);
+    } else {
+      imgStart = performance.now();
+      armMax(gen, Math.max(0, imgSeconds - imgElapsed) * 1000);
+    }
+  }
+
+  document.getElementById('next').onclick = () => advance(generation);
+  document.getElementById('prev').onclick = () => show(i - 1);
+  pauseBtn.onclick = togglePause;
+  soundBtn.onclick = (e) => {
+    e.stopPropagation();
+    vid.muted = !vid.muted;
+    wantSound = !vid.muted;
+    triedMuted = vid.muted;
+    soundBtn.textContent = vid.muted ? '🔇' : '🔊';
+    if (!vid.muted) playClip(generation);
+  };
+  const unlock = () => {
+    if (wantSound && vid.muted) {
+      vid.muted = false;
+      triedMuted = false;
+      soundBtn.textContent = '🔊';
+    }
+  };
+  addEventListener('pointerdown', unlock);
+  addEventListener('keydown', unlock);
+  document.getElementById('full').onclick = () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen();
+  };
+  addEventListener('keydown', e => {
+    const key = (e.key || '').toLowerCase();
+    if (key === 'arrowright' || key === ' ') { e.preventDefault(); advance(generation); }
+    else if (key === 'arrowleft') show(i - 1);
+    else if (key === 'p') togglePause();
+    else if (key === 'm') soundBtn.click();
+    else if (key === 'f') document.getElementById('full').click();
+  });
+
+  function requestBoundaryReload(reason) {
+    boundaryReload = reason;
+    // Don't wait on a clip that will never end.
+    setTimeout(() => { if (boundaryReload) safeReload(reason, false); }, (maxClip + 15) * 1000);
+  }
+
+  function msUntilHour(hour) {
+    const now = new Date();
+    const next = new Date(now.getTime());
+    next.setHours(hour, 0, 0, 0);
+    if (next <= now) next.setDate(next.getDate() + 1);
+    return next.getTime() - now.getTime();
+  }
+
+  if (nightlyOn) setTimeout(() => requestBoundaryReload('nightly'), msUntilHour(nightlyHour));
+  if (reloadHours > 0) setTimeout(() => requestBoundaryReload('scheduled'), reloadHours * 3600 * 1000);
+
+  async function wake() {
+    try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch (e) {}
+  }
+  wake();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(); });
+  setInterval(wake, 60000);
+
+  // A shop Wi-Fi "online" blip used to reload the page immediately. That looked
+  // like a crash and, with the old GitHub lookup, ate the API rate limit.
+  // Retry only the clip that actually failed to load.
+  addEventListener('online', () => {
+    if (Date.now() - booted < 5000 || paused || !slides.length) return;
+    if (isVideo(slides[i]) && (vid.error || vid.networkState === 3)) show(i);
+  });
+
+  // Log script errors. Reloading here caused a reboot loop when play() threw.
+  // The watchdog below reloads only if the loop itself has stopped.
+  window.onerror = (m) => { note('error: ' + m); };
+
+  setInterval(() => {
+    if (!slides.length) return;
+    if (paused || document.hidden) { lastGood = Date.now(); return; }
     if (isVideo(slides[i])) {
       const d = vid.duration;
-      bar.style.width = d ? (100 * vid.currentTime / d) + '%' : '0%';
-    } else if (!paused) {
-      const t = imgElapsed + (performance.now() - imgStart) / 1000;
+      bar.style.width = (d && isFinite(d)) ? (100 * vid.currentTime / d) + '%' : '0%';
+    } else if (img.classList.contains('on')) {
+      const t = imgElapsed + (paused ? 0 : (performance.now() - imgStart) / 1000);
       bar.style.width = Math.min(100, 100 * t / imgSeconds) + '%';
     }
-    raf = requestAnimationFrame(tick);
-  }
-  // TV browsers leak memory when they play video after video, and eventually the page dies
-  // (the image boards don't have this problem because pictures are light).
-  // Fix: after every full loop, reload the page cleanly at the clip boundary to clear memory.
-  // ---- "Fresh" mode (?fresh=1): load a brand-new page for EVERY clip, the way the
-  // picture boards behave, so the TV browser never builds up video memory.
-  // The next clip number is remembered across reloads so the order keeps going.
-  const fresh = params.get('fresh') === '1';
-  const store = { get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } },
-                  set(k,v){ try { localStorage.setItem(k, v); } catch(e){} } };
-  // Diagnostics (?debug=1): small on-screen box with uptime, reload count, errors.
-  const debug = params.get('debug') === '1';
-  if (!store.get('hb_since')) store.set('hb_since', Date.now());
-  store.set('hb_loads', (Number(store.get('hb_loads')) || 0) + 1);
+  }, 250);
+
+  setInterval(() => {
+    if (paused || !slides.length || document.hidden || reloading) {
+      lastGood = Date.now();
+      return;
+    }
+    if (Date.now() - lastGood > watchdogSeconds * 1000) {
+      lastGood = Date.now();
+      recover('no progress');
+    }
+  }, 5000);
+
   let dbg = null;
   if (debug) {
     dbg = document.createElement('div');
@@ -50,105 +380,71 @@
     setInterval(() => {
       const up = Math.round((Date.now() - Number(store.get('hb_since'))) / 60000);
       const mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) + ' MB' : 'n/a';
-      dbg.textContent = `mode: ${fresh ? 'fresh' : 'normal'}\nrunning: ${up} min\npage loads: ${store.get('hb_loads')}\nclip: ${i + 1}/${slides.length}\nmemory: ${mem}\nlast problem: ${store.get('hb_err') || 'none'}`;
+      dbg.textContent = 'mode: ' + (fresh ? 'fresh' : 'normal')
+        + '\nrunning: ' + up + ' min'
+        + '\npage loads: ' + store.get('hb_loads')
+        + '\nclip: ' + (slides.length ? (i + 1) + '/' + slides.length : '0')
+        + '\nmemory: ' + mem
+        + '\nlast problem: ' + (store.get('hb_err') || 'none');
     }, 1000);
   }
-  const note = msg => store.set('hb_err', new Date().toLocaleTimeString() + ' ' + msg);
-  const loopsBeforeReload = Math.max(1, Number(params.get('loops')) || 10);
-  let loopsDone = 0;
-  function next(){
-    if (fresh && slides.length > 1) { store.set('hb_next', (i + 1) % slides.length); location.replace(location.href); return; }
-    if (slides.length > 1 && i === slides.length - 1 && ++loopsDone >= loopsBeforeReload) { location.reload(); return; }
-    show(i + 1);
-  }
-  function fail(){
-    failures++;
-    if (failures < slides.length) next();
-    else { failures = 0; clearTimeout(timer); timer = setTimeout(() => show(0), 60000); } // nothing loaded (e.g. site still publishing): retry in a minute
-  }
-  function show(n){
-    if (!slides.length) return;
-    clearTimeout(timer);
-    i = (n + slides.length) % slides.length;
-    const src = slides[i];
-    counter.textContent = `${i + 1} / ${slides.length}`;
-    bar.style.width = '0%';
-    if (isVideo(src)) {
-      img.classList.remove('on');
-      vid.onended = next;
-      vid.onerror = () => { note('could not load ' + src); fail(); };
-      vid.pause(); vid.removeAttribute('src'); vid.load();   // free the previous clip's memory
-      vid.src = src;
-      vid.play().then(() => { failures = 0; vid.classList.add('on'); })
-        .catch(() => { vid.muted = true; soundBtn.textContent = '🔇'; vid.play().then(() => vid.classList.add('on')).catch(fail); });
-      timer = setTimeout(next, maxClip * 1000);
-      if (paused) vid.pause();
-    } else {
-      vid.pause(); vid.removeAttribute('src'); vid.load(); vid.classList.remove('on');
-      const p = new Image();
-      p.onload = () => { img.src = src; img.classList.add('on'); failures = 0; imgStart = performance.now(); imgElapsed = 0; if (!paused) timer = setTimeout(next, imgSeconds * 1000); };
-      p.onerror = fail;
-      p.src = src;
-    }
-  }
-  function togglePause(){
-    paused = !paused;
-    pauseBtn.textContent = paused ? '▶' : 'Ⅱ';
-    if (isVideo(slides[i])) { paused ? vid.pause() : vid.play(); }
-    else if (paused) { clearTimeout(timer); imgElapsed += (performance.now() - imgStart) / 1000; }
-    else { imgStart = performance.now(); timer = setTimeout(next, Math.max(0, imgSeconds - imgElapsed) * 1000); }
-  }
-  document.getElementById('next').onclick = next;
-  document.getElementById('prev').onclick = () => show(i - 1);
-  pauseBtn.onclick = togglePause;
-  soundBtn.onclick = (e) => { e.stopPropagation(); vid.muted = !vid.muted; wantSound = !vid.muted; soundBtn.textContent = vid.muted ? '🔇' : '🔊'; };
-  const unlock = () => { if (wantSound && vid.muted) { vid.muted = false; soundBtn.textContent = '🔊'; } };
-  addEventListener('pointerdown', unlock); addEventListener('keydown', unlock);
-  document.getElementById('full').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
-  addEventListener('keydown', e => {
-    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); next(); }
-    else if (e.key === 'ArrowLeft') show(i - 1);
-    else if (e.key.toLowerCase() === 'p') togglePause();
-    else if (e.key.toLowerCase() === 'm') soundBtn.click();
-    else if (e.key.toLowerCase() === 'f') document.getElementById('full').click();
-  });
-  const reloadHours = Math.max(1, Number(params.get('reload')) || 4);
-  async function wake(){ try { if ('wakeLock' in navigator) await navigator.wakeLock.request('screen'); } catch(e){} }
-  wake(); document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(); });
-  setTimeout(() => location.reload(), reloadHours * 3600 * 1000);
-  async function discover(){
-    try {
-      const r = await fetch(`https://api.github.com/repos/${REPO}/contents/${FOLDER}?t=${Date.now()}`);
-      if (!r.ok) throw 0;
-      const found = (await r.json())
-        .filter(f => f.type === 'file' && /\.(mp4|webm|mov|m4v|jpe?g|png|gif|webp)$/i.test(f.name))
-        .map(f => FOLDER + '/' + f.name)
-        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-      if (found.length) slides = found;
-    } catch (e) {}
-    if (params.get('shuffle') === '1') slides.sort(() => Math.random() - 0.5);
-    if (!slides.length) { counter.textContent = 'No clips yet'; counter.style.opacity = 1; return; }
-    let start = 0;
-    if (fresh) { start = Number(store.get('hb_next')) || 0; if (start >= slides.length) start = 0; }
-    show(start);
-  }
-  // ---- Keep-alive: make sure the loop never stops ----
-  // 1) If a clip freezes (no progress for 6s), skip to the next one.
-  // 2) If the whole board has made no progress for 90s, reload the page.
-  // 3) Reload when the TV's internet comes back. 4) Re-ask the TV to stay awake every minute.
-  let lastT = -1, stillSecs = 0, lastProgress = Date.now();
-  setInterval(() => {
-    if (paused || !slides.length) { lastProgress = Date.now(); return; }
-    if (isVideo(slides[i])) {
-      const t = vid.currentTime;
-      if (t !== lastT) { lastT = t; stillSecs = 0; lastProgress = Date.now(); }
-      else if (++stillSecs >= 6) { stillSecs = 0; lastT = -1; note('clip froze: ' + slides[i]); next(); }
-    } else lastProgress = Date.now();
-    if (Date.now() - lastProgress > 90000) { note('board stuck, reloaded'); location.reload(); }
-  }, 1000);
-  addEventListener('online', () => location.reload());
-  setInterval(wake, 60000);
-  window.onerror = (m) => { note('error: ' + m); setTimeout(() => location.reload(), 10000); };
 
-  tick(); discover();
+  function normalize(list) {
+    const out = [];
+    for (let n = 0; n < list.length; n++) {
+      const item = list[n];
+      const src = typeof item === 'string' ? item : (item && item.src);
+      if (typeof src === 'string' && src) out.push(src);
+    }
+    return out;
+  }
+
+  function withTimeout(promise, ms) {
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('timeout')), ms);
+      promise.then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
+    });
+  }
+
+  async function loadPlaylist() {
+    const fallback = normalize(window.SLIDES || []);
+    // Don't let a hung manifest request keep the TV on a black screen.
+    // AbortController is missing on some older TV browsers, so the timer
+    // stands on its own and playback falls back to slides.js.
+    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    const killer = ctrl ? setTimeout(() => ctrl.abort(), 4000) : null;
+    try {
+      const r = await withTimeout(fetch('clips.json', {
+        cache: 'no-store',
+        signal: ctrl ? ctrl.signal : undefined
+      }), 4000);
+      if (!r.ok) throw new Error('status ' + r.status);
+      const data = await r.json();
+      const list = normalize(Array.isArray(data) ? data : (data && data.clips) || []);
+      if (list.length) return list;
+    } catch (e) {
+      note('using slides.js');
+    } finally {
+      if (killer) clearTimeout(killer);
+    }
+    return fallback;
+  }
+
+  loadPlaylist().then(list => {
+    slides = list;
+    if (params.get('shuffle') === '1') slides.sort(() => Math.random() - 0.5);
+    if (!slides.length) {
+      counter.textContent = 'No clips yet';
+      counter.style.opacity = 1;
+      return;
+    }
+    let start = 0;
+    const raw = store.get('hb_next');
+    if (raw) {
+      const n = Number(raw);
+      if (isFinite(n) && n >= 0) start = n % slides.length;
+      store.set('hb_next', '');
+    }
+    show(start);
+  });
 })();
