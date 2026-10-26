@@ -1,0 +1,3 @@
+New Year clips and images, Dec 31 through Jan 7.
+They play after the built-in kickoff slides, with a few boiler-season slides mixed in.
+Number them 01-, 02-, … then commit.

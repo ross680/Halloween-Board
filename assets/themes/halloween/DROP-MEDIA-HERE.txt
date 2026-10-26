@@ -1,0 +1,3 @@
+Optional extra Halloween clips and images.
+Files here join assets/clips/ and play in file-name order from Oct 1 through Nov 1.
+Number them 01-, 02-, … Commit, and the playlist updates with the rest.

@@ -1,9 +1,7 @@
 (() => {
-  // Shop-TV playlist. One video element is reused for every clip. The playlist
-  // comes from clips.json (regenerated in CI from assets/clips). slides.js is
-  // the same list, used when that file can't be fetched. There is no GitHub API
-  // call: an unattended TV was burning the unauthenticated rate limit and then
-  // playing a stale fallback.
+  // Shop-TV board. One video element is reused for every clip. Cards are HTML.
+  // The media list comes from clips.json (regenerated in CI). slides.js is the
+  // same list, used when that file can't be fetched. There is no GitHub API call.
   const params = new URLSearchParams(location.search);
   const num = (key, fallback, min, max) => {
     if (!params.has(key)) return fallback;
@@ -26,9 +24,14 @@
   const nightlyHour = num('athour', 3, 0, 23);
   const fresh = params.get('fresh') === '1';
   const debug = params.get('debug') === '1';
+  const settings = window.BOARD_SETTINGS || {};
+  const schedule = window.BOARD_SCHEDULE;
 
+  const stage = document.getElementById('stage');
   const vid = document.getElementById('vid');
   const img = document.getElementById('img');
+  const card = document.getElementById('card');
+  const fx = document.getElementById('fx');
   const bar = document.querySelector('#progress span');
   const counter = document.getElementById('counter');
   const pauseBtn = document.getElementById('pause');
@@ -48,8 +51,10 @@
   let triedMuted = false;
   soundBtn.textContent = vid.muted ? '🔇' : '🔊';
 
-  const isVideo = s => /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(s);
+  const isVideoSrc = s => /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(s || '');
   let slides = [];
+  let board = null;
+  let parts = null;
   let i = 0;
   let generation = 0;
   let expectedSrc = '';
@@ -67,9 +72,31 @@
   let sawFrame = false;
   let imgStart = 0;
   let imgElapsed = 0;
+  let atmosphere = '';
   const booted = Date.now();
 
   const note = msg => store.set('hb_err', new Date().toLocaleTimeString() + ' ' + msg);
+
+  function kindOf(slide) {
+    if (!slide) return 'card';
+    if (slide.kind) return slide.kind;
+    if (typeof slide === 'string') return isVideoSrc(slide) ? 'video' : 'image';
+    if (slide.src) return isVideoSrc(slide.src) ? 'video' : 'image';
+    return 'card';
+  }
+  function srcOf(slide) {
+    if (!slide) return '';
+    return typeof slide === 'string' ? slide : (slide.src || '');
+  }
+  function labelOf(slide) {
+    if (!slide) return '';
+    if (typeof slide === 'string') return slide;
+    return slide.label || srcOf(slide) || 'slide';
+  }
+  function secondsOf(slide) {
+    if (slide && slide.card && slide.card.seconds) return slide.card.seconds;
+    return imgSeconds;
+  }
 
   function releaseVideo() {
     // Detach the decoder before the next clip. Handlers ignore this moment
@@ -90,6 +117,11 @@
     img.removeAttribute('src');
   }
 
+  function releaseCard() {
+    card.className = '';
+    card.textContent = '';
+  }
+
   function clearClipTimers() {
     clearTimeout(timer);
     clearTimeout(stallTimer);
@@ -101,7 +133,7 @@
     clearTimeout(stallTimer);
     stallTimer = setTimeout(() => {
       if (gen !== generation || paused) return;
-      recover('stalled ' + (slides[i] || ''));
+      recover('stalled ' + labelOf(slides[i]));
     }, stallSeconds * 1000);
   }
 
@@ -130,7 +162,7 @@
         playClip(gen);
         return;
       }
-      recover('playback rejected ' + (slides[i] || ''));
+      recover('playback rejected ' + labelOf(slides[i]));
     });
   }
 
@@ -194,6 +226,100 @@
     }, 0);
   }
 
+  function setAtmosphere(theme) {
+    if (atmosphere === theme) return;
+    atmosphere = theme;
+    if (stage.dataset.theme) stage.classList.remove('theme-' + stage.dataset.theme);
+    stage.dataset.theme = theme;
+    stage.classList.add('theme-' + theme);
+    fx.textContent = '';
+    const kind = {
+      boiler: 'ember',
+      christmas: 'snow',
+      newyear: 'spark',
+      thanksgiving: 'leaf',
+      valentines: 'heart',
+      stpatricks: 'clover',
+      july4: 'star'
+    }[theme];
+    if (!kind) return;
+    let n;
+    for (n = 0; n < 14; n++) {
+      const el = document.createElement('span');
+      el.className = 'bit ' + kind;
+      el.style.left = ((n * 7) % 96) + '%';
+      el.style.animationDuration = (10 + (n % 7)) + 's';
+      el.style.animationDelay = (-n * 0.7) + 's';
+      el.style.fontSize = (22 + (n % 4) * 6) + 'px';
+      if (kind === 'heart') el.textContent = '\u2665';
+      fx.appendChild(el);
+    }
+  }
+
+  function fillCard(slide) {
+    const data = slide.card || {};
+    const theme = slide.theme || 'shop';
+    card.className = 'on theme-' + theme;
+    const scrim = document.createElement('div');
+    scrim.className = 'scrim';
+    const art = document.createElement('div');
+    art.className = 'art';
+    art.innerHTML = (window.BOARD_ART && window.BOARD_ART[theme]) || (window.BOARD_ART && window.BOARD_ART.shop) || '';
+    const copy = document.createElement('div');
+    copy.className = 'copy';
+
+    const brandline = document.createElement('div');
+    brandline.className = 'brandline';
+    const mark = document.createElement('div');
+    mark.className = 'mark';
+    mark.textContent = '3R';
+    const brand = document.createElement('div');
+    brand.className = 'brand';
+    brand.textContent = 'Plumbing & Mechanical';
+    brandline.appendChild(mark);
+    brandline.appendChild(brand);
+
+    const kicker = document.createElement('p');
+    kicker.className = 'kicker';
+    kicker.textContent = data.kicker || '';
+
+    const title = document.createElement('h1');
+    let titleText = data.title || '';
+    if (parts && titleText.indexOf('{year}') !== -1) {
+      const year = parts.month === 12 ? parts.year + 1 : parts.year;
+      titleText = titleText.split('{year}').join(String(year));
+    }
+    title.textContent = titleText;
+
+    copy.appendChild(brandline);
+    copy.appendChild(kicker);
+    copy.appendChild(title);
+    if (data.lines && data.lines.length) {
+      const ul = document.createElement('ul');
+      ul.className = 'lines';
+      let n;
+      for (n = 0; n < data.lines.length; n++) {
+        const li = document.createElement('li');
+        li.textContent = data.lines[n];
+        ul.appendChild(li);
+      }
+      copy.appendChild(ul);
+    } else if (data.body) {
+      const p = document.createElement('p');
+      p.className = 'lead';
+      p.textContent = data.body;
+      copy.appendChild(p);
+    }
+    const foot = document.createElement('p');
+    foot.className = 'cardfoot';
+    foot.textContent = data.foot || '3R Plumbing & Mechanical';
+    copy.appendChild(foot);
+
+    card.appendChild(scrim);
+    card.appendChild(art);
+    card.appendChild(copy);
+  }
+
   function show(n) {
     if (!slides.length) return;
     let gen;
@@ -202,13 +328,18 @@
       clearClipTimers();
       releaseImage();
       releaseVideo();
+      releaseCard();
       i = ((n % slides.length) + slides.length) % slides.length;
-      const src = slides[i];
+      const slide = slides[i];
+      const kind = kindOf(slide);
+      const src = srcOf(slide);
       counter.textContent = (i + 1) + ' / ' + slides.length;
       bar.style.width = '0%';
       lastMediaTime = -1;
       sawFrame = false;
-      if (isVideo(src)) {
+      stage.classList.toggle('media', kind !== 'card');
+      setAtmosphere(kind === 'card' ? (slide.theme || 'shop') : ((board && board.theme) || 'shop'));
+      if (kind === 'video') {
         expectedSrc = src;
         vid.onended = () => {
           if (generation !== gen) return;
@@ -218,7 +349,6 @@
           advance(gen);
         };
         vid.onerror = () => {
-          // Ignore the error some browsers emit while the previous clip is released.
           const current = vid.getAttribute('src') || '';
           if (!current || current !== expectedSrc || generation !== gen) return;
           recover('could not load ' + current);
@@ -241,7 +371,7 @@
         armMax(gen, maxClip * 1000);
         armStall(gen);
         if (paused) vid.pause();
-      } else {
+      } else if (kind === 'image') {
         img.onload = () => {
           if (generation !== gen) return;
           img.classList.add('on');
@@ -253,6 +383,13 @@
         };
         img.onerror = () => { if (generation === gen) recover('could not load ' + src); };
         img.src = src;
+      } else {
+        fillCard(slide);
+        failures = 0;
+        lastGood = Date.now();
+        imgStart = performance.now();
+        imgElapsed = 0;
+        if (!paused) armMax(gen, secondsOf(slide) * 1000);
       }
     } catch (e) {
       note('show failed ' + (e && e.message ? e.message : e));
@@ -262,21 +399,21 @@
 
   function togglePause() {
     paused = !paused;
-    pauseBtn.textContent = paused ? '▶' : 'Ⅱ';
+    pauseBtn.textContent = paused ? '\u25b6' : '\u2161';
     const gen = generation;
     if (paused) {
       clearClipTimers();
-      if (isVideo(slides[i])) { try { vid.pause(); } catch (e) {} }
+      if (kindOf(slides[i]) === 'video') { try { vid.pause(); } catch (e) {} }
       else imgElapsed += (performance.now() - imgStart) / 1000;
       return;
     }
-    if (isVideo(slides[i])) {
+    if (kindOf(slides[i]) === 'video') {
       playClip(gen);
       armMax(gen, Math.max(0, deadline - Date.now()));
       armStall(gen);
     } else {
       imgStart = performance.now();
-      armMax(gen, Math.max(0, imgSeconds - imgElapsed) * 1000);
+      armMax(gen, Math.max(0, secondsOf(slides[i]) - imgElapsed) * 1000);
     }
   }
 
@@ -288,14 +425,14 @@
     vid.muted = !vid.muted;
     wantSound = !vid.muted;
     triedMuted = vid.muted;
-    soundBtn.textContent = vid.muted ? '🔇' : '🔊';
-    if (!vid.muted) playClip(generation);
+    soundBtn.textContent = vid.muted ? '\uD83D\uDD07' : '\uD83D\uDD0A';
+    if (!vid.muted && kindOf(slides[i]) === 'video') playClip(generation);
   };
   const unlock = () => {
     if (wantSound && vid.muted) {
       vid.muted = false;
       triedMuted = false;
-      soundBtn.textContent = '🔊';
+      soundBtn.textContent = '\uD83D\uDD0A';
     }
   };
   addEventListener('pointerdown', unlock);
@@ -337,12 +474,10 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(); });
   setInterval(wake, 60000);
 
-  // A shop Wi-Fi "online" blip used to reload the page immediately. That looked
-  // like a crash and, with the old GitHub lookup, ate the API rate limit.
-  // Retry only the clip that actually failed to load.
+  // A shop Wi-Fi blip retries the clip that failed. It does not reload the page.
   addEventListener('online', () => {
     if (Date.now() - booted < 5000 || paused || !slides.length) return;
-    if (isVideo(slides[i]) && (vid.error || vid.networkState === 3)) show(i);
+    if (kindOf(slides[i]) === 'video' && (vid.error || vid.networkState === 3)) show(i);
   });
 
   // Log script errors. Reloading here caused a reboot loop when play() threw.
@@ -352,12 +487,13 @@
   setInterval(() => {
     if (!slides.length) return;
     if (paused || document.hidden) { lastGood = Date.now(); return; }
-    if (isVideo(slides[i])) {
+    if (kindOf(slides[i]) === 'video') {
       const d = vid.duration;
       bar.style.width = (d && isFinite(d)) ? (100 * vid.currentTime / d) + '%' : '0%';
-    } else if (img.classList.contains('on')) {
-      const t = imgElapsed + (paused ? 0 : (performance.now() - imgStart) / 1000);
-      bar.style.width = Math.min(100, 100 * t / imgSeconds) + '%';
+    } else {
+      const total = secondsOf(slides[i]);
+      const t = imgElapsed + (performance.now() - imgStart) / 1000;
+      bar.style.width = Math.min(100, 100 * t / total) + '%';
     }
   }, 250);
 
@@ -372,15 +508,14 @@
     }
   }, 5000);
 
-  let dbg = null;
   if (debug) {
-    dbg = document.createElement('div');
+    const dbg = document.createElement('div');
     dbg.style.cssText = 'position:fixed;left:10px;top:10px;z-index:9;background:rgba(0,0,0,.75);color:#ff7a1a;font:14px monospace;padding:8px 10px;border-radius:6px;white-space:pre';
     document.body.appendChild(dbg);
     setInterval(() => {
       const up = Math.round((Date.now() - Number(store.get('hb_since'))) / 60000);
       const mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) + ' MB' : 'n/a';
-      dbg.textContent = 'mode: ' + (fresh ? 'fresh' : 'normal')
+      dbg.textContent = 'theme: ' + (board ? board.theme : '')
         + '\nrunning: ' + up + ' min'
         + '\npage loads: ' + store.get('hb_loads')
         + '\nclip: ' + (slides.length ? (i + 1) + '/' + slides.length : '0')
@@ -391,12 +526,33 @@
 
   function normalize(list) {
     const out = [];
-    for (let n = 0; n < list.length; n++) {
+    if (!list || !list.length) return out;
+    let n;
+    for (n = 0; n < list.length; n++) {
       const item = list[n];
       const src = typeof item === 'string' ? item : (item && item.src);
       if (typeof src === 'string' && src) out.push(src);
     }
     return out;
+  }
+
+  function readMedia(data) {
+    const themes = {};
+    if (!data) return themes;
+    if (Array.isArray(data)) {
+      themes.halloween = normalize(data);
+      return themes;
+    }
+    const bag = data.themes ? data.themes : (Array.isArray(data.clips) ? null : data);
+    if (data.themes || (!data.clips && bag)) {
+      let key;
+      for (key in bag) {
+        if (Array.isArray(bag[key])) themes[key] = normalize(bag[key]);
+      }
+      if (data.themes || themes.halloween) return themes;
+    }
+    if (Array.isArray(data.clips)) themes.halloween = normalize(data.clips);
+    return themes;
   }
 
   function withTimeout(promise, ms) {
@@ -406,11 +562,108 @@
     });
   }
 
-  async function loadPlaylist() {
-    const fallback = normalize(window.SLIDES || []);
-    // Don't let a hung manifest request keep the TV on a black screen.
-    // AbortController is missing on some older TV browsers, so the timer
-    // stands on its own and playback falls back to slides.js.
+  function nyParts(date) {
+    try {
+      const fmt = new Intl.DateTimeFormat('en-US', {
+        timeZone: settings.timezone || 'America/New_York',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const bits = fmt.formatToParts(date);
+      const grab = type => {
+        let n;
+        for (n = 0; n < bits.length; n++) if (bits[n].type === type) return Number(bits[n].value);
+        return 0;
+      };
+      return { year: grab('year'), month: grab('month'), day: grab('day') };
+    } catch (e) {
+      return { year: date.getFullYear(), month: date.getMonth() + 1, day: date.getDate() };
+    }
+  }
+
+  function previewParts() {
+    const raw = params.get('date');
+    if (!raw) return null;
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+    if (!m) return null;
+    return { year: Number(m[1]), month: Number(m[2]), day: Number(m[3]) };
+  }
+
+  function mediaSlides(theme, media) {
+    const list = (media && media[theme]) || [];
+    const out = [];
+    let n;
+    for (n = 0; n < list.length; n++) {
+      const src = list[n];
+      out.push({
+        kind: isVideoSrc(src) ? 'video' : 'image',
+        src: src,
+        theme: theme,
+        label: src
+      });
+    }
+    return out;
+  }
+
+  function cardSlides(theme) {
+    const list = (window.BOARD_CARDS && window.BOARD_CARDS[theme]) || [];
+    const out = [];
+    let n;
+    for (n = 0; n < list.length; n++) {
+      out.push({
+        kind: 'card',
+        theme: theme,
+        card: list[n],
+        label: list[n].title || theme
+      });
+    }
+    return out;
+  }
+
+  function interleave(main, extra, every) {
+    if (!extra.length || !main.length) return main.slice();
+    const out = [];
+    const step = every > 0 ? every : 2;
+    let e = 0;
+    let n;
+    for (n = 0; n < main.length; n++) {
+      out.push(main[n]);
+      if ((n + 1) % step === 0) {
+        out.push(extra[e % extra.length]);
+        e++;
+      }
+    }
+    return out;
+  }
+
+  function buildSlides(choice, media) {
+    let main;
+    // Halloween stays a straight clip reel. No cards, no boiler slides.
+    if (choice.theme === 'halloween') main = mediaSlides('halloween', media);
+    else main = cardSlides(choice.theme).concat(mediaSlides(choice.theme, media));
+    if (choice.mixBoiler && choice.theme !== 'boiler') {
+      const boiler = cardSlides('boiler').concat(mediaSlides('boiler', media));
+      main = interleave(main, boiler, settings.boilerMixEvery || 2);
+    }
+    if (!main.length) {
+      main = [{
+        kind: 'card',
+        theme: choice.theme,
+        label: 'No slides yet',
+        card: {
+          kicker: '3R',
+          title: 'No slides in this theme yet',
+          body: 'Drop MP4s or images into this theme\u2019s folder and update the playlist.',
+          foot: '3R Plumbing & Mechanical'
+        }
+      }];
+    }
+    return main;
+  }
+
+  async function loadMedia() {
+    let media = readMedia(window.SLIDES || {});
     const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
     const killer = ctrl ? setTimeout(() => ctrl.abort(), 4000) : null;
     try {
@@ -419,31 +672,57 @@
         signal: ctrl ? ctrl.signal : undefined
       }), 4000);
       if (!r.ok) throw new Error('status ' + r.status);
-      const data = await r.json();
-      const list = normalize(Array.isArray(data) ? data : (data && data.clips) || []);
-      if (list.length) return list;
+      const parsed = readMedia(await r.json());
+      let any = false;
+      let key;
+      for (key in parsed) {
+        if (parsed[key] && parsed[key].length) any = true;
+      }
+      // An empty manifest still wins when the file loaded, so a theme with
+      // only cards is not replaced by a stale slides.js full of clips.
+      if (any || (parsed && parsed.halloween)) media = parsed;
     } catch (e) {
       note('using slides.js');
     } finally {
       if (killer) clearTimeout(killer);
     }
-    return fallback;
+    return media;
   }
 
-  loadPlaylist().then(list => {
-    slides = list;
+  loadMedia().then(media => {
+    parts = previewParts() || nyParts(new Date());
+    const forced = (params.get('theme') || '').toLowerCase();
+    if (forced && schedule && schedule.describe) {
+      board = schedule.describe(forced, parts);
+      if (!board) note('unknown theme ' + forced);
+    }
+    if (!board) board = schedule ? schedule.resolve(parts) : { theme: 'halloween', mixBoiler: false, label: 'Halloween' };
+    slides = buildSlides(board, media);
+    window.__board = {
+      theme: board.theme,
+      label: board.label,
+      mixBoiler: board.mixBoiler,
+      date: parts,
+      slides: slides.map(s => ({ kind: s.kind, theme: s.theme, label: s.label }))
+    };
     if (params.get('shuffle') === '1') slides.sort(() => Math.random() - 0.5);
+    document.title = '3R ' + (board.label || 'Shop TV');
     if (!slides.length) {
-      counter.textContent = 'No clips yet';
+      counter.textContent = 'No slides yet';
       counter.style.opacity = 1;
       return;
     }
     let start = 0;
-    const raw = store.get('hb_next');
-    if (raw) {
-      const n = Number(raw);
-      if (isFinite(n) && n >= 0) start = n % slides.length;
-      store.set('hb_next', '');
+    if (params.has('slide')) {
+      const q = Number(params.get('slide'));
+      if (isFinite(q)) start = Math.max(1, q) - 1;
+    } else {
+      const raw = store.get('hb_next');
+      if (raw) {
+        const n = Number(raw);
+        if (isFinite(n) && n >= 0) start = n % slides.length;
+        store.set('hb_next', '');
+      }
     }
     show(start);
   });

@@ -1,0 +1,5 @@
+Heating-season clips and images. They play with the built-in boiler slides
+from Oct 1 through Mar 31, except when a holiday takes the board.
+A few boiler slides are also mixed into Thanksgiving, Christmas, New Year,
+Valentine's Day, and St. Patrick's Day.
+Number files 01-, 02-, … then commit.
