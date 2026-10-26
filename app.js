@@ -1,25 +1,87 @@
 (() => {
   // Plays a mix of video clips (mp4/webm/mov) and images.
   // Videos play to the end, then advance. Images show for ?seconds= (default 15).
-  // Clips are discovered automatically from assets/clips in the GitHub repo
-  // (sorted by file name). slides.js is only a fallback if GitHub can't be reached.
-  const REPO = 'ross680/Halloween-Board', FOLDER = 'assets/clips';
-  let slides = (window.SLIDES || []).slice();
+  // The clip list comes from clips.json (this site, or a newer copy committed to
+  // the repo). slides.js is only a backup if those files can't be read. The
+  // GitHub API is used only when both lists are missing.
+  // A clip that fails to load is skipped and not shown.
+  const REPO = 'ross680/Halloween-Board', BRANCH = 'main', FOLDER = 'assets/clips';
+  // Keep in sync with scripts/generate-clips.js.
+  const MEDIA = /\.(mp4|webm|mov|m4v|jpe?g|png|gif|webp)(\?|#|$)/i;
+  const isVideo = s => /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(s);
+  function byName(a, b) { return a.localeCompare(b, undefined, { numeric: true }); }
+  function sanitize(list) {
+    if (!list || !list.length) return [];
+    const out = [];
+    for (let n = 0; n < list.length; n++) {
+      const s = list[n];
+      if (typeof s !== 'string') continue;
+      if (s.indexOf('..') !== -1 || s.charAt(0) === '/') continue;
+      if (/^[a-z][a-z0-9+.-]*:/i.test(s)) continue;
+      if (!MEDIA.test(s)) continue;
+      out.push(s);
+    }
+    return out;
+  }
+  function parseManifest(data) {
+    if (!data) return null;
+    const raw = Array.isArray(data) ? data : data.slides;
+    const list = sanitize(raw).sort(byName);
+    if (!list.length) return null;
+    const generated = typeof data.generated === 'string' ? Date.parse(data.generated) : 0;
+    return { slides: list, generated: generated || 0 };
+  }
+  function newer(a, b) {
+    if (!a) return b;
+    if (!b) return a;
+    return a.generated >= b.generated ? a : b;
+  }
+  function loadJson(url) {
+    return fetch(url, { cache: 'no-store' }).then(r => r.ok ? r.json() : null).then(parseManifest).catch(() => null);
+  }
+  function within(p, ms) {
+    return new Promise(resolve => {
+      let done = false;
+      const t = setTimeout(() => { if (!done) { done = true; resolve(null); } }, ms);
+      p.then(v => { if (!done) { done = true; clearTimeout(t); resolve(v); } },
+             () => { if (!done) { done = true; clearTimeout(t); resolve(null); } });
+    });
+  }
+  function fromGitHub() {
+    return fetch('https://api.github.com/repos/' + REPO + '/contents/' + FOLDER + '?t=' + Date.now())
+      .then(r => r.ok ? r.json() : null)
+      .then(body => {
+        if (!Array.isArray(body)) return null;
+        const list = [];
+        for (let n = 0; n < body.length; n++) {
+          const f = body[n];
+          if (f && f.type === 'file' && f.name) list.push(FOLDER + '/' + f.name);
+        }
+        const clean = sanitize(list).sort(byName);
+        return clean.length ? clean : null;
+      })
+      .catch(() => null);
+  }
+
+  let slides = sanitize(window.SLIDES || []).sort(byName);
+  let listSource = 'slides.js';
+  let loadGen = 0;
   const vid = document.getElementById('vid'), img = document.getElementById('img');
   const bar = document.querySelector('#progress span'), counter = document.getElementById('counter');
   const pauseBtn = document.getElementById('pause'), soundBtn = document.getElementById('sound');
   const params = new URLSearchParams(location.search);
   const imgSeconds = Math.max(5, Number(params.get('seconds')) || 15);
   const maxClip = Math.max(10, Number(params.get('maxclip')) || 60); // safety cap per clip
-  let i = 0, timer = null, paused = false, failures = 0, raf = null, imgStart = 0, imgElapsed = 0;
+  let i = 0, timer = null, paused = false, failures = 0, raf = null, imgStart = 0, imgElapsed = 0, holdUntil = 0;
+  let lastT = -1, stillSecs = 0, lastProgress = Date.now();
   // Sound is ON by default (add ?mute=1 to start muted). If the TV browser blocks
   // autoplay with sound, it starts muted and the first click/key/tap turns sound on.
   vid.muted = params.get('mute') === '1';
   let wantSound = !vid.muted;
   soundBtn.textContent = vid.muted ? '🔇' : '🔊';
-  const isVideo = s => /\.(mp4|webm|mov|m4v)(\?|$)/i.test(s);
 
   function tick(){
+    if (!slides.length || i < 0 || i >= slides.length) { raf = requestAnimationFrame(tick); return; }
     if (isVideo(slides[i])) {
       const d = vid.duration;
       bar.style.width = d ? (100 * vid.currentTime / d) + '%' : '0%';
@@ -38,20 +100,26 @@
   const fresh = params.get('fresh') === '1';
   const store = { get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } },
                   set(k,v){ try { localStorage.setItem(k, v); } catch(e){} } };
+  failures = Number(store.get('hb_fail')) || 0;
+  if (!isFinite(failures) || failures < 0) failures = 0;
   // Diagnostics (?debug=1): small on-screen box with uptime, reload count, errors.
   const debug = params.get('debug') === '1';
   if (!store.get('hb_since')) store.set('hb_since', Date.now());
   store.set('hb_loads', (Number(store.get('hb_loads')) || 0) + 1);
   let dbg = null;
+  function paintDebug() {
+    if (!dbg) return;
+    const up = Math.round((Date.now() - Number(store.get('hb_since'))) / 60000);
+    const mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) + ' MB' : 'n/a';
+    dbg.textContent = `mode: ${fresh ? 'fresh' : 'normal'}\nlist: ${listSource}\nrunning: ${up} min\npage loads: ${store.get('hb_loads')}\nclip: ${slides.length ? (i + 1) + '/' + slides.length : '0'}\nmemory: ${mem}\nlast problem: ${store.get('hb_err') || 'none'}`;
+  }
   if (debug) {
     dbg = document.createElement('div');
+    dbg.id = 'debug';
     dbg.style.cssText = 'position:fixed;left:10px;top:10px;z-index:9;background:rgba(0,0,0,.75);color:#ff7a1a;font:14px monospace;padding:8px 10px;border-radius:6px;white-space:pre';
     document.body.appendChild(dbg);
-    setInterval(() => {
-      const up = Math.round((Date.now() - Number(store.get('hb_since'))) / 60000);
-      const mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) + ' MB' : 'n/a';
-      dbg.textContent = `mode: ${fresh ? 'fresh' : 'normal'}\nrunning: ${up} min\npage loads: ${store.get('hb_loads')}\nclip: ${i + 1}/${slides.length}\nmemory: ${mem}\nlast problem: ${store.get('hb_err') || 'none'}`;
-    }, 1000);
+    paintDebug();
+    setInterval(paintDebug, 1000);
   }
   const note = msg => store.set('hb_err', new Date().toLocaleTimeString() + ' ' + msg);
   const loopsBeforeReload = Math.max(1, Number(params.get('loops')) || 10);
@@ -61,33 +129,101 @@
     if (slides.length > 1 && i === slides.length - 1 && ++loopsDone >= loopsBeforeReload) { location.reload(); return; }
     show(i + 1);
   }
+  // Snap the video off before a bad file can paint a broken frame.
+  function hideVid() {
+    vid.style.transition = 'none';
+    vid.classList.remove('on');
+    void vid.offsetWidth;
+    vid.style.transition = '';
+  }
+  function markLoaded() {
+    failures = 0;
+    store.set('hb_fail', '0');
+  }
   function fail(){
     failures++;
+    store.set('hb_fail', String(failures));
+    hideVid();
     if (failures < slides.length) next();
-    else { failures = 0; clearTimeout(timer); timer = setTimeout(() => show(0), 60000); } // nothing loaded (e.g. site still publishing): retry in a minute
+    else {
+      failures = 0;
+      store.set('hb_fail', '0');
+      clearTimeout(timer);
+      holdUntil = Date.now() + 60000;
+      timer = setTimeout(() => { holdUntil = 0; show(0); }, 60000); // nothing loaded: retry in a minute
+    }
   }
   function show(n){
     if (!slides.length) return;
     clearTimeout(timer);
+    const my = ++loadGen;
     i = (n + slides.length) % slides.length;
     const src = slides[i];
+    stillSecs = 0; lastT = -1; lastProgress = Date.now();
     counter.textContent = `${i + 1} / ${slides.length}`;
     bar.style.width = '0%';
+    const alive = () => my === loadGen;
+    let skipped = false;
+    const skip = () => {
+      if (skipped || !alive()) return;
+      skipped = true;
+      note('could not load ' + src);
+      fail();
+    };
+    const started = () => {
+      if (!alive() || skipped) return;
+      markLoaded();
+      vid.classList.add('on');
+      if (paused) vid.pause();
+    };
     if (isVideo(src)) {
       img.classList.remove('on');
-      vid.onended = next;
-      vid.onerror = () => { note('could not load ' + src); fail(); };
-      vid.pause(); vid.removeAttribute('src'); vid.load();   // free the previous clip's memory
+      vid.onended = null;
+      vid.onerror = null;
+      vid.pause();
+      hideVid();
+      vid.removeAttribute('src');
+      vid.load();
       vid.src = src;
-      vid.play().then(() => { failures = 0; vid.classList.add('on'); })
-        .catch(() => { vid.muted = true; soundBtn.textContent = '🔇'; vid.play().then(() => vid.classList.add('on')).catch(fail); });
-      timer = setTimeout(next, maxClip * 1000);
+      vid.onerror = () => {
+        if (!alive() || skipped) return;
+        let current = vid.currentSrc || vid.src || '';
+        try { current = decodeURI(current); } catch (e) {}
+        if (current.indexOf(src) === -1) return; // ignore the error from clearing the previous clip
+        skip();
+      };
+      vid.onended = () => { if (alive() && !skipped) next(); };
+      const playAttempt = vid.play();
+      timer = setTimeout(() => { if (alive()) next(); }, maxClip * 1000);
       if (paused) vid.pause();
+      playAttempt.then(started).catch(err => {
+        if (!alive() || skipped || paused) return;
+        if (err && (err.name === 'NotSupportedError')) { skip(); return; }
+        if (err && err.name === 'AbortError') return;
+        // Autoplay with sound was blocked: retry muted, then skip if it still won't play.
+        vid.muted = true;
+        soundBtn.textContent = '🔇';
+        vid.play().then(started).catch(err2 => {
+          if (!alive() || skipped) return;
+          if (err2 && err2.name === 'AbortError') return;
+          skip();
+        });
+      });
     } else {
-      vid.pause(); vid.removeAttribute('src'); vid.load(); vid.classList.remove('on');
+      vid.onended = null;
+      vid.onerror = null;
+      vid.pause(); vid.removeAttribute('src'); vid.load(); hideVid();
       const p = new Image();
-      p.onload = () => { img.src = src; img.classList.add('on'); failures = 0; imgStart = performance.now(); imgElapsed = 0; if (!paused) timer = setTimeout(next, imgSeconds * 1000); };
-      p.onerror = fail;
+      p.onload = () => {
+        if (!alive() || skipped) return;
+        img.src = src;
+        img.classList.add('on');
+        markLoaded();
+        imgStart = performance.now();
+        imgElapsed = 0;
+        if (!paused) timer = setTimeout(() => { if (alive()) next(); }, imgSeconds * 1000);
+      };
+      p.onerror = () => skip();
       p.src = src;
     }
   }
@@ -117,28 +253,34 @@
   wake(); document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(); });
   setTimeout(() => location.reload(), reloadHours * 3600 * 1000);
   async function discover(){
-    try {
-      const r = await fetch(`https://api.github.com/repos/${REPO}/contents/${FOLDER}?t=${Date.now()}`);
-      if (!r.ok) throw 0;
-      const found = (await r.json())
-        .filter(f => f.type === 'file' && /\.(mp4|webm|mov|m4v|jpe?g|png|gif|webp)$/i.test(f.name))
-        .map(f => FOLDER + '/' + f.name)
-        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-      if (found.length) slides = found;
-    } catch (e) {}
+    const localP = loadJson('clips.json?t=' + Date.now());
+    const remoteP = loadJson('https://raw.githubusercontent.com/' + REPO + '/' + BRANCH + '/clips.json?t=' + Date.now());
+    const local = await within(localP, 4000);
+    // The repo copy updates when the list action commits, even if Pages has not
+    // rebuilt that commit yet. Give it a moment, then keep the newer list.
+    const remote = await within(remoteP, local ? 800 : 2500);
+    const manifest = newer(remote, local);
+    if (manifest) {
+      slides = manifest.slides;
+      listSource = manifest === remote && remote ? 'clips.json (repo)' : 'clips.json';
+    } else if (!slides.length) {
+      const api = await within(fromGitHub(), 4000);
+      if (api) { slides = api; listSource = 'github api'; }
+    }
     if (params.get('shuffle') === '1') slides.sort(() => Math.random() - 0.5);
+    if (failures >= slides.length && slides.length) { failures = 0; store.set('hb_fail', '0'); }
     if (!slides.length) { counter.textContent = 'No clips yet'; counter.style.opacity = 1; return; }
     let start = 0;
     if (fresh) { start = Number(store.get('hb_next')) || 0; if (start >= slides.length) start = 0; }
+    paintDebug();
     show(start);
   }
   // ---- Keep-alive: make sure the loop never stops ----
   // 1) If a clip freezes (no progress for 6s), skip to the next one.
   // 2) If the whole board has made no progress for 90s, reload the page.
   // 3) Reload when the TV's internet comes back. 4) Re-ask the TV to stay awake every minute.
-  let lastT = -1, stillSecs = 0, lastProgress = Date.now();
   setInterval(() => {
-    if (paused || !slides.length) { lastProgress = Date.now(); return; }
+    if (paused || !slides.length || Date.now() < holdUntil) { lastProgress = Date.now(); stillSecs = 0; return; }
     if (isVideo(slides[i])) {
       const t = vid.currentTime;
       if (t !== lastT) { lastT = t; stillSecs = 0; lastProgress = Date.now(); }

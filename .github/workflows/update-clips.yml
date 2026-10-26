@@ -1,0 +1,45 @@
+# Rebuilds the clip list when a file is added to or removed from assets/clips.
+# The commit updates clips.json and slides.js on main. Publishing from the
+# branch does not run for this bot commit, so the board also reads the repo
+# copy of clips.json and keeps whichever list is newer.
+
+name: Update clip list
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "assets/clips/**"
+      - "scripts/generate-clips.js"
+      - ".github/workflows/update-clips.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-clip-list
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rebuild clips.json and slides.js
+        run: node scripts/generate-clips.js
+
+      - name: Commit the clip list when it changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add clips.json slides.js
+          if git diff --cached --quiet; then
+            echo "Clip list already matches assets/clips"
+            exit 0
+          fi
+          git commit -m "Update clip list from assets/clips"
+          git push origin HEAD:main
