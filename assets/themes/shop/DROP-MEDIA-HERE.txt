@@ -1,0 +1,3 @@
+Everyday shop clips and images, used when no holiday or heating season is on
+(roughly April through September, outside the Fourth of July).
+Number them 01-, 02-, … then commit.

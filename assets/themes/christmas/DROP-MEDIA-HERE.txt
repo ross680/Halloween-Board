@@ -1,0 +1,3 @@
+Christmas clips and images, Dec 1 through Dec 30.
+They play after the built-in holiday slides, with a few boiler-season slides mixed in.
+Number them 01-, 02-, … then commit.

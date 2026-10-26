@@ -1,2 +1,6 @@
-Drag Halloween clips (MP4/WebM/MOV) into this folder.
-They play in file-name order, so number them: 01-..., 02-...
+Halloween clips live here (MP4, WebM, MOV, or images).
+They play in file-name order during the Halloween window, Oct 1 through Nov 1.
+Number them 01-, 02-, … so the order is obvious.
+Extra Halloween files can also go in assets/themes/halloween/.
+Commit the files. GitHub Actions rebuilds clips.json and slides.js.
+To rebuild them yourself: node scripts/update-manifest.mjs

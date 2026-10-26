@@ -1,0 +1,93 @@
+/* Full-screen theme cards. Type is sized for a 1080p shop TV. */
+#fx{position:absolute;inset:0;z-index:1;pointer-events:none;overflow:hidden}
+#card{position:absolute;inset:0;z-index:3;opacity:0;pointer-events:none;transition:opacity .6s ease}
+#card.on{opacity:1}
+#vid,#img{z-index:2}
+#fade,#progress,#counter,#controls{z-index:5}
+
+#stage.theme-boiler{background:
+  radial-gradient(ellipse at 78% 110%, rgba(255,100,20,.55), transparent 52%),
+  radial-gradient(ellipse at 10% 0%, rgba(255,122,26,.16), transparent 42%),
+  #140904}
+#stage.theme-halloween{background:#000}
+#stage.theme-thanksgiving{background:
+  radial-gradient(ellipse at 80% 100%, rgba(180,90,20,.45), transparent 50%),
+  linear-gradient(165deg, #2a140c, #140c08 60%)}
+#stage.theme-christmas{background:
+  radial-gradient(ellipse at 80% 90%, rgba(20,90,50,.7), transparent 55%),
+  linear-gradient(180deg, #07140f, #0c2418)}
+#stage.theme-newyear{background:
+  radial-gradient(ellipse at 70% 40%, rgba(244,228,176,.16), transparent 42%),
+  #07080d}
+#stage.theme-valentines{background:
+  radial-gradient(ellipse at 80% 80%, rgba(180,30,60,.45), transparent 50%),
+  #1a0a10}
+#stage.theme-stpatricks{background:
+  radial-gradient(ellipse at 75% 90%, rgba(40,140,60,.4), transparent 50%),
+  #07140c}
+#stage.theme-july4{background:
+  radial-gradient(ellipse at 70% 20%, rgba(20,50,110,.65), transparent 50%),
+  linear-gradient(180deg, #07101c, #12080c)}
+#stage.theme-shop{background:
+  radial-gradient(ellipse at 85% 80%, rgba(255,122,26,.28), transparent 46%),
+  #100e0c}
+
+#stage.theme-boiler #fx::after{
+  content:"";position:absolute;left:-8%;right:-8%;bottom:-18%;height:48%;
+  background:radial-gradient(ellipse at 50% 100%, rgba(255,130,30,.42), transparent 62%);
+  animation:heat 7s ease-in-out infinite
+}
+@keyframes heat{
+  50%{transform:translateY(-18px) scaleX(1.06);opacity:.75}
+}
+
+.bit{position:absolute;top:-12%;display:block}
+.bit.snow{width:12px;height:12px;border-radius:50%;background:#fff;animation:fall linear infinite}
+.bit.ember{width:10px;height:10px;border-radius:50%;background:#ff7a1a;top:auto;bottom:-8%;animation:rise linear infinite;box-shadow:0 0 12px #ff7a1a}
+.bit.spark{width:8px;height:8px;border-radius:50%;background:#f4e4b0;top:auto;bottom:-8%;animation:rise linear infinite;box-shadow:0 0 10px #f4e4b0}
+.bit.leaf{width:22px;height:14px;border-radius:0 70% 0 70%;background:#e39b3a;animation:fall linear infinite}
+.bit.heart{color:#ff6b86;font-size:28px;line-height:1;animation:fall linear infinite}
+.bit.star{width:16px;height:16px;background:#f4e4b0;clip-path:polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);animation:fall linear infinite}
+.bit.clover{width:22px;height:22px;animation:fall linear infinite;background:
+  radial-gradient(circle at 30% 35%, #3dbe4a 42%, transparent 44%),
+  radial-gradient(circle at 70% 35%, #3dbe4a 42%, transparent 44%),
+  radial-gradient(circle at 50% 72%, #3dbe4a 42%, transparent 44%)}
+@keyframes fall{to{transform:translateY(115vh) rotate(180deg)}}
+@keyframes rise{to{transform:translateY(-115vh);opacity:.15}}
+
+.scrim{position:absolute;inset:0;background:linear-gradient(90deg, rgba(0,0,0,.88) 0%, rgba(0,0,0,.78) 48%, rgba(0,0,0,.28) 100%)}
+.art{position:absolute;right:4%;top:50%;width:38%;height:78%;transform:translateY(-50%);z-index:1}
+.art svg{width:100%;height:100%;overflow:visible}
+.copy{position:relative;z-index:2;height:100%;box-sizing:border-box;padding:64px 46% 84px 80px;display:flex;flex-direction:column;justify-content:center}
+.brandline{display:flex;align-items:center;gap:18px;margin-bottom:22px}
+.mark{width:92px;height:92px;border-radius:18px;background:#ff7a1a;color:#1a0c06;font-family:"Arial Black",Arial,Helvetica,sans-serif;font-size:42px;font-weight:800;display:flex;align-items:center;justify-content:center;letter-spacing:-.04em;flex:none}
+.brand{font-size:28px;font-weight:700;letter-spacing:.04em;line-height:1.15;text-transform:uppercase}
+.kicker{margin:0 0 10px;color:#ff7a1a;font-size:32px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}
+#card h1{margin:0 0 22px;font-family:"Arial Black",Arial,Helvetica,sans-serif;font-size:72px;line-height:1.02;font-weight:800;max-width:12em}
+.lead{margin:0;font-size:40px;line-height:1.28;max-width:18em;font-weight:700}
+.lines{margin:0;padding:0;list-style:none}
+.lines li{position:relative;margin:0 0 14px;padding-left:42px;font-size:38px;line-height:1.2;font-weight:700}
+.lines li::before{content:"";position:absolute;left:0;top:.35em;width:18px;height:18px;border-radius:4px;background:#ff7a1a}
+.cardfoot{margin:26px 0 0;font-size:28px;font-weight:700;letter-spacing:.04em;opacity:.85}
+
+.art .flame{transform-origin:210px 280px;animation:flicker 1.6s ease-in-out infinite}
+.art .leaf{transform-origin:210px 280px;animation:sway 5s ease-in-out infinite}
+.art .tree{transform-origin:210px 400px;animation:sway 6s ease-in-out infinite}
+.art .spark{transform-origin:210px 230px;animation:flicker 2.4s ease-in-out infinite}
+.art .pulse{transform-origin:210px 250px;animation:pulse 2.8s ease-in-out infinite}
+.art .sway{transform-origin:210px 360px;animation:sway 5.5s ease-in-out infinite}
+.art .twinkle{transform-origin:210px 220px;animation:flicker 2.2s ease-in-out infinite}
+@keyframes flicker{50%{transform:scale(1.05,.96);opacity:.88}}
+@keyframes sway{50%{transform:rotate(3deg)}}
+@keyframes pulse{50%{transform:scale(1.06)}}
+
+#stage.media .scrim,#stage.media #fx{opacity:0}
+#card.theme-christmas .kicker,#card.theme-newyear .kicker{color:#f4e4b0}
+#card.theme-stpatricks .kicker{color:#8ce99a}
+#card.theme-valentines .kicker{color:#ff8aa0}
+#card.theme-july4 .kicker{color:#f4e4b0}
+#card.theme-thanksgiving .kicker{color:#f3c27a}
+
+@media (prefers-reduced-motion: reduce){
+  .bit,.art .flame,.art .leaf,.art .tree,.art .spark,.art .pulse,.art .sway,.art .twinkle,#stage.theme-boiler #fx::after{animation:none}
+}
